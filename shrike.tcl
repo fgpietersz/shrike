@@ -36,7 +36,7 @@
 #*Put more info into headers dict: DOCUMENT_ROOT, REMOTE_ADDR etc.
 #*Error logging to file, console or none
 #*Add more filters
-#*Timeout connections that take too long. [after {close $socket} and undo all [chan configure] should do it, but how to deal with removing the event when the socket closes?.
+#*Timeout connections that take too long. [after {close $socket) and undo all [chan configure] should do it, but how to deal with removing the event when the socket closes?.
 #*Implement keep-alive. Needs new API with socket closed only by server, not app, and content length header is sent.
 #*Pipelining. Should work once keep-alive is implemented.
 #*More request types: TRACE and OPTIONS.
@@ -82,23 +82,23 @@ namespace eval dandelion {
 #Dict of http error codes
 #Check what is actually needed!
 variable errors [dict create \
-	100 Continue \
-	200 OK \
-	204 {No Content} \
-	400 {Bad Request} \
-	404 {Not Found} \
-	405 {Method Not Allowed} \
-	411 {Length Required} \
-	413 {Request Entity Too Large} \
-	500 {Internal Server Error} \
-	501 {Not Implemented} \
-	503 {Service Unavailable} \
-	504 {Service Temporarily Unavailable}]
+        100 Continue \
+        200 OK \
+        204 {No Content} \
+        400 {Bad Request} \
+        404 {Not Found} \
+        405 {Method Not Allowed} \
+        411 {Length Required} \
+        413 {Request Entity Too Large} \
+        500 {Internal Server Error} \
+        501 {Not Implemented} \
+        503 {Service Unavailable} \
+        504 {Service Temporarily Unavailable}]
 
 #Dict of actual first lines or response
 variable first_line [dict create]
 dict for {k v} $errors {
-	dict set first_line $k "HTTP/1.1 $k [dict get $errors $k]\nConnection: Close"
+        dict set first_line $k "HTTP/1.1 $k [dict get $errors $k]\nConnection: Close"
 }
 
 #Just to avoid overwriting global
@@ -120,16 +120,16 @@ variable ports [dict create]
 #* static: try serving a static file first (only if the file extension has a mime type).
 #* static_fail: what to do if static file cannot be found. 1 to return 404, 0 to fall back to handler
 variable config [dict create \
-	limit 1024 \
-	addr 0 \
-	check_dir 0 \
-	doc_root [file join ~ public_html] \
-	port 8080 \
-	handler static_handler \
-	static 1 \
-	static_fail 1 \
-	filter_sock {} \
-	filter_req {}]
+        limit 1024 \
+        addr 0 \
+        check_dir 0 \
+        doc_root [file join ~ public_html] \
+        port 8080 \
+        handler static_handler \
+        static 1 \
+        static_fail 1 \
+        filter_sock {} \
+        filter_req {}]
 
 #Just for pattern matching
 variable pattern_sp [subst -nocommands -novariables {[ \t]*}]
@@ -141,272 +141,291 @@ variable pattern_sp [subst -nocommands -novariables {[ \t]*}]
 #Calling init on the same port again will close server socket and open new one.
 #$args should be name value list to override defaults.
 proc init {args} {
-	variable ports
-	variable config
-	#$args overrides config. {*}$config {*}$args does not work.
-	set settings [dict create {*}[concat $config $args]]
-	dict with settings {
-		set doc_root [file normalize $doc_root]
-		if {[dict exists $ports $port]} {stop $port}
-		set opts [list -server ::dandelion::respond]
-		if {$addr != 0} {lappend opts -myaddr $addr}
-		lappend opts $port
-	}
-	dict set settings server_sock [socket {*}$opts]
-	puts "server on [dict get $settings port]"
-	dict set ports $port $settings
+        variable ports
+        variable config
+        #$args overrides config. {*}$config {*}$args does not work.
+        set settings [dict create {*}[concat $config $args]]
+        dict with settings {
+                set doc_root [file normalize $doc_root]
+                if {[dict exists $ports $port]} {stop $port}
+                set opts [list -server ::dandelion::respond]
+                if {$addr != 0} {lappend opts -myaddr $addr}
+                lappend opts $port
+        }
+        dict set settings server_sock [socket {*}$opts]
+        #puts "server on [dict get $settings port]"
+        dict set ports $port $settings
 }
 
 #==stop
 #Stop server, remove info from dict.
 proc stop {port} {
-	variable ports
-	close [dict get $port sock]
-	dict unset ports $port
+        variable ports
+        close [dict get [dict get $ports $port] server_sock]
+        dict unset ports $port
 }
 
 #==respond
 #Respond to request: Configure socket and call [get_initial] to start reading in data.
 #args: socket, client address, client port.
 proc respond {sock caddr cport} {
-	variable ports
-	#Get the server port and use it to get the setting from the dict. Very neat behaviour on the part of [chan configure]/[fconfigure] as we do not need the original file handle.
-	set settings [dict get $ports [lindex [chan configure $sock -sockname] 2]]
-	chan configure $sock -blocking 0 -buffersize [min [dict get $settings limit] 1000000]
-	#filter by socket data: ip is easilly pulled from the scoket name with [chan configure $sock -peername]. A true return value from the lambda expression called will terminate the response.
-	foreach i [dict get $settings filter_sock] {
-		if {[apply $i $sock]} {return}
-	}
-	chan event $sock readable [list ::dandelion::get_initial $sock $settings {}]
-	return
+        variable ports
+        #Get the server port and use it to get the setting from the dict. Very neat behaviour on the part of [chan configure]/[fconfigure] as we do not need the original file handle.
+        set settings [dict get $ports [lindex [chan configure $sock -sockname] 2]]
+        chan configure $sock -blocking 0 -buffersize [min [dict get $settings limit] 1000000]
+        #filter by socket data: ip is easilly pulled from the scoket name with [chan configure $sock -peername]. A true return value from the lambda expression called will terminate the response.
+        foreach i [dict get $settings filter_sock] {
+                if {[apply $i $sock]} {return}
+        }
+        chan event $sock readable [list ::dandelion::get_initial $sock $settings {}]
+        return
 }
 
 #==get_initial
 #Get the initial line of the requests.
 proc get_initial {sock settings {line {}}} {
-	#Check request size against limit.
-	if {([chan pending input $sock]+[string bytelength $line])>[dict get $settings limit]} {
-		deny $sock 413 $settings
-		return
-	}
-	#Try to get the line.
-	append line [gets $sock]
-	#If we got a partial line, complete when more is available.
-	if {[chan blocked $sock]} {
-		chan event $sock [list ::dandelion::get_initial $sock $settings $line]
-		return
-	}
-	set size [string bytelength $line]
-	set line [split [string trim $line]]
-	#Should only be three elements in the inital line.
-	if {[llength $line] > 3} {
-		deny $sock 400 $settings
-		return
-	}
-	#Reject request for files if request uri is absolute. This should be extended to proper http 1.1 support.
-	set uri [lindex $line 1]
-	if {[string index $uri 0] ne {/}} {
-		deny $sock 400 $settings
-		return
-	}
-	#Strip fragment.
-	if {[string first # $uri] != -1} {
-		set uri [string range $uri 0 [string first # $uri]]
-	}
-	#Separate query string.
-	lassign [split $uri ?] path query
-	if {[string first {./} $uri] != -1} {
-		deny $sock 404 $settings
-		return
-	}
-	chan event $sock readable [list ::dandelion::get_headers $sock $size [dict create REQUEST_METHOD [lindex $line 0] REQUEST_URI $uri SCRIPT_NAME [decode $path] QUERY_STRING $query SERVER_PROTOCOL [lindex $line 2]] $settings {}]
-	return
+        #Check request size against limit.
+        if {([chan pending input $sock]+[string bytelength $line])>[dict get $settings limit]} {
+                deny $sock 413 $settings
+                return
+        }
+        #Try to get the line.
+        append line [gets $sock]
+        #If we got a partial line, complete when more is available.
+        if {[chan blocked $sock]} {
+                chan event $sock [list ::dandelion::get_initial $sock $settings $line]
+                return
+        }
+        set size [string bytelength $line]
+        set line [split [string trim $line]]
+        #Should only be three elements in the inital line.
+        if {[llength $line] > 3} {
+                deny $sock 400 $settings
+                return
+        }
+        #Reject request for files if request uri is absolute. This should be extended to proper http 1.1 support.
+        set uri [lindex $line 1]
+        if {[string index $uri 0] ne {/}} {
+                deny $sock 400 $settings
+                return
+        }
+        #Strip fragment.
+        if {[string first # $uri] != -1} {
+                set uri [string range $uri 0 [string first # $uri]]
+        }
+        #Separate query string.
+        lassign [split $uri ?] path query
+        if {[string first {./} $uri] != -1} {
+                deny $sock 404 $settings
+                return
+        }
+        chan event $sock readable [list ::dandelion::get_headers $sock $size [dict create REQUEST_METHOD [lindex $line 0] REQUEST_URI $uri SCRIPT_NAME [decode $path] QUERY_STRING $query SERVER_PROTOCOL [lindex $line 2]] $settings {}]
+        return
+}
+
+# A helper procedure to read from a socket but also check for an error
+proc get_sock_line { sock line } {
+        upvar $line line_out
+    if { [catch { set num_bytes [gets $sock line_out]}] } {
+        #puts "Error reading socket.  Closing."
+        return -1
+    }
+    return $num_bytes
 }
 
 #==get_headers
 #Get headers a line at a time. Once complete either pass to try_file or handler, or read body.
 #Args: socket bytes-data-read dict-of-headers settings partial-line-if-any
 proc get_headers {sock size headers settings {partial {}}} {
-	variable pattern_sp
-	#If what is in the buffer, and what has already been processed, exceeds the limit, send back a 413
-	if {([chan pending input $sock] + $size) > [dict get $settings limit]} {
-		deny $sock 413 $settings
-		return
-	}
-	while {[gets $sock line] >= 0} {
-		#Deal with partial line: Store data in event handler. Increase size by data read from buffer
-		#Increase size by data read from buffer. Add two bytes for discarded cr-lf newline.
-		set size [+ $size [string bytelength $line] 2]
-		if { "$partial$line" eq {}} {
-		        #headers done, adjust to match CGI, then get body (if any!)
-		        foreach i [list CONTENT_TYPE CONTENT_LENGTH] {
-		                if [dict exists $headers HTTP_$i] {
-		                        dict set headers $i [dict get  $headers HTTP_$i]
-		                }
-		        }
-		        foreach i [dict get $settings filter_req] {
-		                lassign [apply $i $headers $settings] $headers $settings
-		                if {[dict size] == 0} {return}
-		        }
-		        #If the request is a GET or HEAD, respond immediately. If a POST get the body. If none of these, reply not implemented.
-		        switch [dict get $headers REQUEST_METHOD] {
-		                GET -
-		                DELETE -
-		                HEAD {
-		                        if {[dict get $settings static] && [try_file $sock $headers $settings]} {return}
-		                        [dict get $settings handler] $sock $headers $settings {}
-		                        return
-		                }
-		                PUT -
-		                POST {
-		                        #check length within limit
-		                        if {[dict exists $headers CONTENT_LENGTH]} {
-		                                if {([dict get $headers CONTENT_LENGTH] + $size)  > [dict get $settings limit]} {
-		                                        deny $sock 413 $settings
-		                                        return
-		                                }
-		                        } else {
-		                                #insist on content length for post
-		                                deny $sock 411 $settings
-		                                return
-		                        }
-		                        #Change encoding to match content type
-		                        if {[dict exists $headers CONTENT_TYPE]} {
-		                                if {[string match multipart/* [dict get $headers CONTENT_TYPE]]} {
-		                                        chan configure $sock -encoding binary -translation binary
-		                                }
-		                        }
-		                        ::dandelion::get_body $sock $size $headers $settings {}
-		                        return
-		                }
-		                default {
-		                        deny $sock 501 $settings
-		                        return
-		                }
-		        }
-		}
-		#Check for continuation line. Inefficient but not common case
-		if {[string match $pattern_sp $line]} {
-		        dict append headers [lindex [dict keys $headers] end] " $line"
-		        continue
-		}
-		#Increase size by data read from buffer. 2 bytes for discarded cr-lf newline.
-		set size [+ $size [string bytelength $partial$line] 2]
-		#Parse header, add to dict. dashes to underscores like CGI, combine multiple values. Combine multiple values.
-		set index [string first : $line]
-		set key HTTP_[string map {- _} [string toupper [string trim [string range $line 0 [- $index 1]]]]]
-		if {[dict exists $headers $key]} {
-		        dict append headers $key ,[string trim [string range $line [+ $index 1] end]]
-		} else {
-		        dict set headers $key [string trim [string range $line [+ $index 1] end]]
-		}
-	}
-	if {[chan blocked $sock]} {
-		chan event $sock readable [list ::dandelion::get_headers $sock [+ $size [string bytelength $partial]] $headers $settings $partial$line]
-		return
-	}
-	#if it is not blocking and headers have not finished and there is nothing to read, something is wrong with the request
-	deny $sock 400 $settings
-	return
+        variable pattern_sp
+        #If what is in the buffer, and what has already been processed, exceeds the limit, send back a 413
+        if {([chan pending input $sock] + $size) > [dict get $settings limit]} {
+                deny $sock 413 $settings
+                return
+        }
+        while {[get_sock_line $sock line] >= 0} {
+                #Deal with partial line: Store data in event handler. Increase size by data read from buffer
+                #Increase size by data read from buffer. Add two bytes for discarded cr-lf newline.
+                set size [+ $size [string bytelength $line] 2]
+                if { "$partial$line" eq {}} {
+                        #headers done, adjust to match CGI, then get body (if any!)
+                        foreach i [list CONTENT_TYPE CONTENT_LENGTH] {
+                                if [dict exists $headers HTTP_$i] {
+                                        dict set headers $i [dict get  $headers HTTP_$i]
+                                }
+                        }
+                        foreach i [dict get $settings filter_req] {
+                                lassign [apply $i $headers $settings] headers settings
+                                if {[dict size $settings] == 0} {return}
+                        }
+                        #If the request is a GET or HEAD, respond immediately. If a POST get the body. If none of these, reply not implemented.
+                        switch [dict get $headers REQUEST_METHOD] {
+                                GET -
+                                DELETE -
+                                HEAD {
+                                        if {[dict get $settings static] && [try_file $sock $headers $settings]} {return}
+                                        [dict get $settings handler] $sock $headers $settings {}
+                                        return
+                                }
+                                PUT -
+                                POST {
+                                        #check length within limit
+                                        if {[dict exists $headers CONTENT_LENGTH]} {
+                                                if {([dict get $headers CONTENT_LENGTH] + $size)  > [dict get $settings limit]} {
+                                                        deny $sock 413 $settings
+                                                        return
+                                                }
+                                        } else {
+                                                #insist on content length for post
+                                                deny $sock 411 $settings
+                                                return
+                                        }
+                                        #Change encoding to match content type
+                                        if {[dict exists $headers CONTENT_TYPE]} {
+                                                if {[string match multipart/* [dict get $headers CONTENT_TYPE]]} {
+                                                        chan configure $sock -encoding binary -translation binary
+                                                }
+                                        }
+                                        ::dandelion::get_body $sock $size $headers $settings {}
+                                        return
+                                }
+                                default {
+                                        deny $sock 501 $settings
+                                        return
+                                }
+                        }
+                }
+                #Check for continuation line. Inefficient but not common case
+                if {[string match $pattern_sp $line]} {
+                        dict append headers [lindex [dict keys $headers] end] " $line"
+                        continue
+                }
+                #Increase size by data read from buffer. 2 bytes for discarded cr-lf newline.
+                set size [+ $size [string bytelength $partial$line] 2]
+                #Parse header, add to dict. dashes to underscores like CGI, combine multiple values. Combine multiple values.
+                set index [string first : $line]
+                set key HTTP_[string map {- _} [string toupper [string trim [string range $line 0 [- $index 1]]]]]
+                if {[dict exists $headers $key]} {
+                        dict append headers $key ,[string trim [string range $line [+ $index 1] end]]
+                } else {
+                        dict set headers $key [string trim [string range $line [+ $index 1] end]]
+                }
+        }
+        if {[chan blocked $sock]} {
+                chan event $sock readable [list ::dandelion::get_headers $sock [+ $size [string bytelength $partial]] $headers $settings $partial$line]
+                return
+        }
+        #if it is not blocking and headers have not finished and there is nothing to read, something is wrong with the request
+    #puts "Something is wrong.  headers dict is:"
+    #puts "$headers"
+        #deny $sock 400 $settings
+        catch { close $sock }
+        return
 }
 
 #==get_body
 #Read request body, try to serve static file, if that fails adjust headers and pass to handler.
 #Args: socket, size read so far, dict of headers, server settings.
 proc get_body {sock size headers settings {body {}}} {
-	if {([chan pending input $sock] + $size + [string bytelength $body]) > [dict get $settings limit]} {
-		deny $sock 413 $settings
-		return
-	}
-	append body [read $sock]
-	if {[chan blocked $sock]} {
-		chan event $sock readable [list ::dandelion::get_body $sock $size $headers $settings $body]
-		return
-	}
-	#nothing left to read, so try returning file, if cannot adjust headers to CGI var names and pass to handler
-	if {[chan configure $sock -encoding] eq {binary}} {
-		set blength [string length $body]
-	} else {
-		set blength [string bytelength $body]
-	}
-	if {[dict exists $headers CONTENT_LENGTH] && ($blength < [dict get $headers CONTENT_LENGTH])} {
-		chan event $sock readable [list ::dandelion::get_body $sock $size $headers $settings $body]
-		return
-	}
-	[dict get $settings handler] $sock $headers $settings $body
-	return
+        if {([chan pending input $sock] + $size + [string bytelength $body]) > [dict get $settings limit]} {
+                deny $sock 413 $settings
+                return
+        }
+        set data [read $sock]
+        if {[string bytelength $data] == 0 && [chan blocked $sock]} {
+                chan event $sock readable [list ::dandelion::get_body $sock $size $headers $settings $body]
+                return
+        } else {
+                append body $data
+        }
+        #nothing left to read, so try returning file, if cannot adjust headers to CGI var names and pass to handler
+        if {[chan configure $sock -encoding] eq {binary}} {
+                set blength [string length $body]
+        } else {
+                set blength [string bytelength $body]
+        }
+        if {[dict exists $headers CONTENT_LENGTH] && ($blength < [dict get $headers CONTENT_LENGTH])} {
+                chan event $sock readable [list ::dandelion::get_body $sock $size $headers $settings $body]
+                return
+        }
+        [dict get $settings handler] $sock $headers $settings $body
+        return
 }
 
 #==try_file
 #Try to return a file. If file exists, return file and close socket. If file does not exist, then pass to handler to respond dynamically. returns 1 if it responds, 0 otherwise.
 proc try_file {sock headers settings} {
-	#get mime type. If it does not have a mime type do not serve and go to handler
-	variable mime
-	set ext [file extension [dict get $headers SCRIPT_NAME]]
-	if {[dict exists $mime $ext]} {
-		set mime_type [dict get $mime $ext]
-	} else {
-		return 0
-	}
-	#normalised request path
-	set path [file normalize [file join [dict get $settings doc_root] [string trimleft [dict get $headers SCRIPT_NAME] /]]]
-	#ensure within doc_root
-	if {[dict get $settings check_dir] && (![string equal [string range $path 0 [- [string length [dict get $settings doc_root]] 1]] [dict get $settings doc_root]])} {
-		deny $sock 404 $settings
-		#return 1 to say response sent
-		return 1
-	}
-	#open file, if error, return 0 so handler is used. Return 404 or fallback to handler depending on settings.
-	if {[catch {file stat $path attribs}]} {
-		if {[dict get $settings static_fail]} {
-		        deny $sock 404 $settings
-		        return 1
-		} else {
-		        #add back looking for default file for directory here. Check if directory and call directory handler?
-		        return 0
-		}
-	}
-	switch [dict get $headers REQUEST_METHOD] {
-		GET {
-		        send_head $sock $mime_type
-		        set fd [open $path r]
-		        if {![string match text/* $mime_type]} {
-		                chan configure $sock -encoding binary -translation binary
-		                chan configure $fd -encoding binary -translation binary
-		        }
-		        chan copy $fd $sock -command [list ::dandelion::file_done $fd $sock]
-		}
-		HEAD {
-		        #just send the header
-		        send_head $sock $mime_type
-		        close $sock
-		}
-		default {
-		        deny $sock 405 $settings
-		        close $sock
-		}
-	}
-	return 1
+        #get mime type. If it does not have a mime type do not serve and go to handler
+        variable mime
+        set ext [file extension [dict get $headers SCRIPT_NAME]]
+        if {[dict exists $mime $ext]} {
+                set mime_type [dict get $mime $ext]
+        } else {
+                return 0
+        }
+        #normalised request path
+        set path [file normalize [file join [dict get $settings doc_root] [string trimleft [dict get $headers SCRIPT_NAME] /]]]
+        #ensure within doc_root
+        if {[dict get $settings check_dir] && (![string equal [string range $path 0 [- [string length [dict get $settings doc_root]] 1]] [dict get $settings doc_root]])} {
+                deny $sock 404 $settings
+                #return 1 to say response sent
+                return 1
+        }
+        #open file, if error, return 0 so handler is used. Return 404 or fallback to handler depending on settings.
+        if {[catch {file stat $path attribs}]} {
+                if {[dict get $settings static_fail]} {
+                        deny $sock 404 $settings
+                        return 1
+                } else {
+                        #add back looking for default file for directory here. Check if directory and call directory handler?
+                        return 0
+                }
+        }
+        switch [dict get $headers REQUEST_METHOD] {
+                GET {
+                        send_head $sock $mime_type
+                        set fd [open $path r]
+                        # FG ++
+                        # Don't check for mime_type - just always return files exactly as they exist on the server
+                        #if {![string match text/* $mime_type]} {
+                                chan configure $sock -encoding binary -translation binary
+                                chan configure $fd -encoding binary -translation binary
+                        #}
+                        chan copy $fd $sock -command [list ::dandelion::file_done $fd $sock]
+                }
+                HEAD {
+                        #just send the header
+                        send_head $sock $mime_type
+                        close $sock
+                }
+                default {
+                        deny $sock 405 $settings
+                        close $sock
+                }
+        }
+        return 1
 }
 
 #==send_head
 #send headers for a file sent by try_file
 #connection close is required to make it clear keep alive and pipelining are not supported.
-proc send_head {sock mime} {
-	upvar attribs attribs
-	variable first_line
-	puts $sock [dict get $first_line 200]
-	puts $sock "Content-Type: $mime"
-	puts $sock [clock format $attribs(atime) -format {Date: %a, %d %b %Y %T GMT} -timezone :UTC]
-	puts $sock "Content-Length: $attribs(size)\n"
+proc send_head {sock mime {cache_control "public, max-age=31536000"}} {
+        upvar attribs attribs
+        variable first_line
+        puts $sock [dict get $first_line 200]
+        puts $sock "Content-Type: $mime"
+        puts $sock [clock format [clock seconds] -format {Date: %a, %d %b %Y %T GMT} -timezone :UTC]
+        puts $sock [clock format $attribs(mtime) -format {Last-Modified: %a, %d %b %Y %T GMT} -timezone :UTC]
+        puts $sock "Cache-Control: $cache_control"
+        puts $sock "Content-Length: $attribs(size)\n"
 }
 
 #==file_done
 #Helper proc to allow try_file to close channels after file is done.
 #Needs extending with error handler?
 proc file_done {fd sock bytes {error {}}} {
-	close $fd
-	close $sock
+        close $fd
+        close $sock
 }
 
 #==decode
@@ -425,14 +444,14 @@ proc decode {str} {
 #Refuse access for whatever reason: e.g. large request that might be DOS
 #args: sock: socket, code: http response code, settings: server settings.
 proc deny {sock code settings} {
-	#expand to be able to return custom error page from file
-	variable first_line
-	variable errors
-	puts $sock [dict get $first_line $code]
-	puts $sock "Content-Type: text/html\n"
-	set msg [dict get $errors $code]
-	puts $sock "<html><head><title>$msg</title></head></html><h1>$msg</h1>"
-	close $sock 
+        #expand to be able to return custom error page from file
+        variable first_line
+        variable errors
+        puts $sock [dict get $first_line $code]
+        puts $sock "Content-Type: text/html\n"
+        set msg [dict get $errors $code]
+        puts $sock "<html><head><title>$msg</title></head></html><h1>$msg</h1>"
+        close $sock 
 }
 
 #=Examples and tests
@@ -441,29 +460,29 @@ proc deny {sock code settings} {
 #Just serve static files, provided as a safe default.
 ####needs testing
 proc static_handler {sock headers settings body} {
-	dict set headers SCRIPT_NAME [file join [dict get $headers SCRIPT_NAME] index.html]
-	if {[try_file $sock $headers $settings]} {return}
-	deny $sock 404 $settings
+        dict set headers SCRIPT_NAME [file join [dict get $headers SCRIPT_NAME] index.html]
+        if {[try_file $sock $headers $settings]} {return}
+        deny $sock 404 $settings
 }
 
 #==simple_handler
 #Simple example of how a handler works.
 proc simple_handler {sock headers settings body} {
-	variable first_line
-	puts $sock [dict get $first_line 404]\n
-	puts $sock {<html><head><title>Show request</title></head><body><h1>Headers</h1><table>}
-	dict for {name value} $headers {
-		puts $sock "<tr><td>$name</td><td>$value</td></tr>"
-	}
-	puts $sock {</table><h1>Settings</h1><table>}
-	dict for {name value} $settings {
-		puts $sock "<tr><td>$name</td><td>$value</td></tr>"
-	}
-	puts $sock {</table><h1>Body</h1><table>}
-	puts $sock $body
-	puts $sock {</body></html>}
-	close $sock
-	return
+        variable first_line
+        puts $sock [dict get $first_line 404]\n
+        puts $sock {<html><head><title>Show request</title></head><body><h1>Headers</h1><table>}
+        dict for {name value} $headers {
+                puts $sock "<tr><td>$name</td><td>$value</td></tr>"
+        }
+        puts $sock {</table><h1>Settings</h1><table>}
+        dict for {name value} $settings {
+                puts $sock "<tr><td>$name</td><td>$value</td></tr>"
+        }
+        puts $sock {</table><h1>Body</h1><table>}
+        puts $sock $body
+        puts $sock {</body></html>}
+        catch { close $sock }
+        return
 }
 
 #End namespace
